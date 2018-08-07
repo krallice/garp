@@ -8,7 +8,7 @@ SRCDIR=src
 BINDIR=bin
 OBJDIR=obj
 
-TARGET=garp
+TARGET=garpd
 
 SOURCES  := $(wildcard $(SRCDIR)/*.c)
 INCLUDES := $(wildcard $(SRCDIR)/*.h)

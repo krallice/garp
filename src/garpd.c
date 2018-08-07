@@ -1,4 +1,4 @@
-#include "garp.h"
+#include "garpd.h"
 
 // General defines:
 #define MAC_LENGTH 6
@@ -14,18 +14,18 @@
 #define ARP_OP_REPLY 0x02
 
 // Struct to hold our interface details:
-typedef struct garp_iface_t {
+typedef struct garpd_iface_t {
 	int iface_index;
 	unsigned char iface_mac[MAC_LENGTH];
 	unsigned char macstring[MAC_LENGTH + 4];
-} garp_iface_t;
+} garpd_iface_t;
 
-// Struct for our utility's settings:
-typedef struct garp_settings_t {
+// Struct for our utility's arguments:
+typedef struct garpd_settings_t {
 	const char *interface_name;
 	const char *ip_start;
-	garp_iface_t *garp_iface;
-} garp_settings_t;
+	garpd_iface_t *garpd_iface;
+} garpd_settings_t;
 
 typedef struct arp_header_t {
     uint16_t hardware_type;
@@ -39,22 +39,7 @@ typedef struct arp_header_t {
     uint8_t target_ip[IPV4_LENGTH];
 } arp_header_t;
 
-// Bail:
-int garp_exit(void) {
-	printf("Error, Exiting\n");
-	exit(1);
-}
-
-void dump_mac(garp_settings_t *garp_settings) {
-
-	//int y = 0;
-	//for (int i = 0; i < MAC_LENGTH; i++) {
-		//garp_settings->garp_iface->macstring[i + y]  = garp_settings->garp_iface->iface_mac[i];
-		//garp_
-	//}
-}
-
-int get_iface_details(garp_settings_t *garp_settings) {
+int get_iface_details(garpd_settings_t *garpd_settings) {
 
 	/*
 	man 7 netdevice:
@@ -94,61 +79,73 @@ int get_iface_details(garp_settings_t *garp_settings) {
 	int sd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
 	if (sd <= 0) {
 		close(sd);
-		garp_exit();
+		printf("Error: Unable to open RAW Socket Descriptor. Check User Permissions.\n");
+		exit(2);
 	}
 
-	strcpy(ifr.ifr_name, garp_settings->interface_name);
+	strcpy(ifr.ifr_name, garpd_settings->interface_name);
 
 	// todo writeup:
 	if (ioctl(sd, SIOCGIFINDEX, &ifr) == -1) {
 		close(sd);
-		garp_exit();
+		printf("Error: Unable to find interface named %s.\n", garpd_settings->interface_name);
+		exit(2);
 	}
 
-	garp_settings->garp_iface->iface_index = ifr.ifr_ifindex;
-	printf("Interface %s Index is %d\n", garp_settings->interface_name, garp_settings->garp_iface->iface_index);
+	garpd_settings->garpd_iface->iface_index = ifr.ifr_ifindex;
+	printf("Interface %s Index is %d\n", garpd_settings->interface_name, garpd_settings->garpd_iface->iface_index);
 
 	// Get MAC Address of the Interface
 	if (ioctl(sd, SIOCGIFHWADDR, &ifr) == -1) {
 		close(sd);
-		garp_exit();
+		printf("Error: Unable to get MAC Address for Interface %s.\n", garpd_settings->interface_name);
+		exit(2);
 	}
 
-	memcpy(garp_settings->garp_iface->iface_mac, ifr.ifr_hwaddr.sa_data, MAC_LENGTH);
-	//printf("Interface %d has MAC %s\n", garp_settings->garp_iface->iface_index, dump_mac(garp_settings));
+	memcpy(garpd_settings->garpd_iface->iface_mac, ifr.ifr_hwaddr.sa_data, MAC_LENGTH);
+	//printf("Interface %d has MAC %s\n", garpd_settings->garpd_iface->iface_index, dump_mac(garpd_settings));
 
 	return 0;
 }
 
 // Main loop:
-int garp_do(garp_settings_t *garp_settings) {
+int garpd_do(garpd_settings_t *garpd_settings) {
 
 	// Get interface details:
-	if (! get_iface_details(garp_settings)) {
+	if (! get_iface_details(garpd_settings)) {
 		return 0;
 	}
 
 	return 1;
 
 }
+
+garpd_settings_t *init_garpd_settings() {
+
+	garpd_settings_t *garpd_settings = (garpd_settings_t*)malloc(sizeof(garpd_settings_t));
+	memset(garpd_settings, 0, sizeof(garpd_settings_t));
+
+	garpd_settings->garpd_iface = (garpd_iface_t*)malloc(sizeof(garpd_iface_t));
+	memset(garpd_settings->garpd_iface, 0, sizeof(garpd_iface_t));
+
+	return garpd_settings;
+
+}
 int main(int argc, const char **argv) {
 
 	// Init our structs:
-	garp_settings_t *garp_settings = (garp_settings_t*)malloc(sizeof(garp_settings_t));
-	memset(garp_settings, 0, sizeof(garp_settings_t));
-
-	garp_settings->garp_iface = (garp_iface_t*)malloc(sizeof(garp_iface_t));
-	memset(garp_settings->garp_iface, 0, sizeof(garp_iface_t));
+	garpd_settings_t *garpd_settings = init_garpd_settings();
 
 	// Check for arg count:
 	if (argc != 3) {
-		garp_exit();
+		printf("Error: Incorrect Arguments Passed.\n");
+		exit(1);
 	}
 
 	// Populate settings & go:
-	garp_settings->interface_name = argv[1];
-	garp_settings->ip_start = argv[2];
-	if (garp_do(garp_settings)) {
+	garpd_settings->interface_name = argv[1];
+	garpd_settings->ip_start = argv[2];
+	if (!garpd_do(garpd_settings)) {
 		return 0;
 	} else {
 		return 2;
