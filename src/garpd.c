@@ -13,6 +13,8 @@
 #define ARP_OP_REQUEST 0x01
 #define ARP_OP_REPLY 0x02
 
+#define GARPD_DEFAULT_REPLY_INTERVAL 1
+
 // Struct to hold our interface details:
 typedef struct garpd_iface_t {
 	int iface_index;
@@ -24,6 +26,8 @@ typedef struct garpd_iface_t {
 typedef struct garpd_settings_t {
 	const char *interface_name;
 	const char *ip_start;
+	int reply_interval;
+	int sd;
 	garpd_iface_t *garpd_iface;
 } garpd_settings_t;
 
@@ -86,6 +90,7 @@ int get_iface_details(garpd_settings_t *garpd_settings) {
 	strcpy(ifr.ifr_name, garpd_settings->interface_name);
 
 	// todo writeup:
+	// Return our interface index based on our interface_name string:
 	if (ioctl(sd, SIOCGIFINDEX, &ifr) == -1) {
 		close(sd);
 		printf("Error: Unable to find interface named %s.\n", garpd_settings->interface_name);
@@ -104,6 +109,22 @@ int get_iface_details(garpd_settings_t *garpd_settings) {
 
 	memcpy(garpd_settings->garpd_iface->iface_mac, ifr.ifr_hwaddr.sa_data, MAC_LENGTH);
 	//printf("Interface %d has MAC %s\n", garpd_settings->garpd_iface->iface_index, dump_mac(garpd_settings));
+	
+	// Save our socket descriptor integer and move on:
+	garpd_settings->sd = sd;
+	return 0;
+}
+
+int send_arp_request(garpd_settings_t *garpd_settings) {
+
+	uint8_t buffer[128];
+	memset(buffer, 0, sizeof(buffer));
+
+	struct sockaddr_ll sockaddr;
+	sockaddr.sll_family = AF_PACKET;
+	sockaddr.sll_ifindex = garpd_settings->garpd_iface->iface_index;
+	sockaddr.sll_protocol = htons(ETH_P_ARP);
+	sockaddr.sll_hatype = htons(ARPHDR_ETHER);
 
 	return 0;
 }
@@ -111,13 +132,18 @@ int get_iface_details(garpd_settings_t *garpd_settings) {
 // Main loop:
 int garpd_do(garpd_settings_t *garpd_settings) {
 
-	// Get interface details:
-	if (! get_iface_details(garpd_settings)) {
-		return 0;
+	// Retrieve interface details:
+	if (get_iface_details(garpd_settings) != 0) {
+		return 1;
 	}
 
-	return 1;
+	// Main Loop:
+	do {
+		send_arp_request(garpd_settings);
+	} while (sleep(garpd_settings->reply_interval) == 0);
 
+	// If we end up here, something has gone wrong and bomb out:
+	return 1;
 }
 
 garpd_settings_t *init_garpd_settings() {
@@ -145,9 +171,10 @@ int main(int argc, const char **argv) {
 	// Populate settings & go:
 	garpd_settings->interface_name = argv[1];
 	garpd_settings->ip_start = argv[2];
-	if (!garpd_do(garpd_settings)) {
-		return 0;
-	} else {
-		return 2;
-	}
+	garpd_settings->reply_interval = GARPD_DEFAULT_REPLY_INTERVAL;
+
+	garpd_do(garpd_settings);
+
+	// Control should only enter here if the main loop has bombed out
+	return 1;
 }
