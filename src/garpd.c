@@ -26,6 +26,7 @@ typedef struct garpd_iface_t {
 typedef struct garpd_settings_t {
 	const char *interface_name;
 	const char *ip_start;
+	struct sockaddr_in ip;
 	int reply_interval;
 	int sd;
 	garpd_iface_t *garpd_iface;
@@ -45,41 +46,8 @@ typedef struct arp_header_t {
 
 int get_iface_details(garpd_settings_t *garpd_settings) {
 
-	/*
-	man 7 netdevice:
-	 struct ifreq {
-		       char ifr_name[IFNAMSIZ];
-		       union {
-			   struct sockaddr ifr_addr;
-			   struct sockaddr ifr_dstaddr;
-			   struct sockaddr ifr_broadaddr;
-			   struct sockaddr ifr_netmask;
-			   struct sockaddr ifr_hwaddr;
-			   short           ifr_flags;
-			   int             ifr_ifindex;
-			   int             ifr_metric;
-			   int             ifr_mtu;
-			   struct ifmap    ifr_map;
-			   char            ifr_slave[IFNAMSIZ];
-			   char            ifr_newname[IFNAMSIZ];
-			   char           *ifr_data;
-		       };
-		   };
-	*/
 	struct ifreq ifr;
 
-	// Socket descriptor:
-	/*
-	AF_PACKET = 
-	Packet  sockets  are  used to receive or send raw packets at the device driver (OSI Layer 2) level.  
-	They allow the user to implement protocol modules in user space on top of the physical layer.  
-	The socket_type is either SOCK_RAW for raw packets including the link-level header or SOCK_DGRAM for cooked packets with the link-level header removed.  
-	The link-level header  information  is  available  in  a  common  format  in  a  sockaddr_ll  structure.   
-	protocol  is the IEEE 802.3 protocol number in network byte order.  
-
-	See the <linux/if_ether.h> include file for a list of allowed protocols.  When protocol is set to htons(ETH_P_ALL), then all protocols are received. 	
-
-	*/
 	int sd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
 	if (sd <= 0) {
 		close(sd);
@@ -89,7 +57,6 @@ int get_iface_details(garpd_settings_t *garpd_settings) {
 
 	strcpy(ifr.ifr_name, garpd_settings->interface_name);
 
-	// todo writeup:
 	// Return our interface index based on our interface_name string:
 	if (ioctl(sd, SIOCGIFINDEX, &ifr) == -1) {
 		close(sd);
@@ -108,8 +75,26 @@ int get_iface_details(garpd_settings_t *garpd_settings) {
 	}
 
 	memcpy(garpd_settings->garpd_iface->iface_mac, ifr.ifr_hwaddr.sa_data, MAC_LENGTH);
-	//printf("Interface %d has MAC %s\n", garpd_settings->garpd_iface->iface_index, dump_mac(garpd_settings));
+	printf("MAC Address is: %02x:%02x:%02x:%02x:%02x:%02x\n",
+			garpd_settings->garpd_iface->iface_mac[0],
+			garpd_settings->garpd_iface->iface_mac[1],
+			garpd_settings->garpd_iface->iface_mac[2],
+			garpd_settings->garpd_iface->iface_mac[3],
+			garpd_settings->garpd_iface->iface_mac[4],
+			garpd_settings->garpd_iface->iface_mac[5]);
 	
+	// Bind our socket to our interface
+	struct sockaddr_ll socket_address;
+	socket_address.sll_family = AF_PACKET;
+	socket_address.sll_protocol = htons(ETH_P_ARP);
+	socket_address.sll_ifindex = garpd_settings->garpd_iface->iface_index;
+
+	if ( bind(sd, (struct sockaddr*)&socket_address, sizeof(socket_address)) == -1 ) {
+		close(sd);
+		printf("Error: Unable to bind socket to interface %s\n", garpd_settings->interface_name);
+		exit(2);
+	}
+
 	// Save our socket descriptor integer and move on:
 	garpd_settings->sd = sd;
 	return 0;
@@ -117,15 +102,65 @@ int get_iface_details(garpd_settings_t *garpd_settings) {
 
 int send_arp_request(garpd_settings_t *garpd_settings) {
 
-	uint8_t buffer[128];
-	memset(buffer, 0, sizeof(buffer));
+	uint8_t buffer[60];
+	memset(buffer, 0x69, sizeof(buffer));
 
-	struct sockaddr_ll sockaddr;
-	sockaddr.sll_family = AF_PACKET;
-	sockaddr.sll_ifindex = garpd_settings->garpd_iface->iface_index;
-	sockaddr.sll_protocol = htons(ETH_P_ARP);
-	sockaddr.sll_hatype = htons(ARPHDR_ETHER);
+	// Our ethernet header struct
 
+	struct sockaddr_ll mysockaddr;
+	mysockaddr.sll_family = AF_PACKET;
+	mysockaddr.sll_ifindex = garpd_settings->garpd_iface->iface_index;
+	mysockaddr.sll_protocol = htons(ETH_P_ARP);
+	mysockaddr.sll_hatype = htons(ARPHRD_ETHER);
+	mysockaddr.sll_pkttype = (PACKET_BROADCAST);
+	mysockaddr.sll_halen = MAC_LENGTH;
+	memset(mysockaddr.sll_addr, 0x00, sizeof(mysockaddr.sll_addr));
+
+	// FORMAT ETHERNET HEADER:
+	
+	// Cast our buffer of bytes as 
+	struct ethhdr *ethernet_header = (struct ethhdr *) buffer;
+	
+	// Set Destination MAC:
+	memset(ethernet_header->h_dest, 0xFF, MAC_LENGTH);
+
+	// Set Source MAC + Socket Address:
+	memcpy(ethernet_header->h_source, garpd_settings->garpd_iface->iface_mac, MAC_LENGTH);
+	memcpy(mysockaddr.sll_addr, garpd_settings->garpd_iface->iface_mac, MAC_LENGTH);
+
+	// Set our proto to ARP:
+	ethernet_header->h_proto = htons(ETH_P_ARP);
+	
+	// FORMAT ARP HEADER:
+	struct arp_header_t *arp_header = (struct arp_header_t *) (buffer + sizeof(struct ethhdr));
+	arp_header->hardware_type = htons(ARP_HTYPE_ETHER);
+	arp_header->protocol_type = htons(ARP_PYTPE_IPV4);
+	arp_header->hardware_len = MAC_LENGTH;
+	arp_header->protocol_len = IPV4_LENGTH;
+	arp_header->opcode = htons(ARP_OP_REPLY);
+
+	memcpy(arp_header->sender_mac, garpd_settings->garpd_iface->iface_mac, MAC_LENGTH);
+	memcpy(arp_header->sender_ip, &(garpd_settings->ip.sin_addr), IPV4_LENGTH);
+
+	memcpy(arp_header->target_ip, &(garpd_settings->ip.sin_addr), IPV4_LENGTH);
+	memset(arp_header->target_mac, 0xFF, MAC_LENGTH);
+
+	if ( sendto(garpd_settings->sd, buffer, (sizeof(struct ethhdr) + sizeof(struct arp_header_t)), 0, (struct sockaddr *) &mysockaddr, sizeof(mysockaddr)) == -1 ){
+		close(garpd_settings->sd);
+		printf("Error: Unable to send on socket\n");
+		exit(2);
+	}
+
+	return 0;
+}
+
+int convert_ip_address(garpd_settings_t *garpd_settings) {
+
+	if (inet_pton(AF_INET, garpd_settings->ip_start, &(garpd_settings->ip.sin_addr)) != 1) {
+		close(garpd_settings->sd);
+		printf("Error: Unable to convert IP address to binary format\n");
+		exit(2);
+	}
 	return 0;
 }
 
@@ -134,6 +169,10 @@ int garpd_do(garpd_settings_t *garpd_settings) {
 
 	// Retrieve interface details:
 	if (get_iface_details(garpd_settings) != 0) {
+		return 1;
+	}
+
+	if (convert_ip_address(garpd_settings) != 0) {
 		return 1;
 	}
 
