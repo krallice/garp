@@ -32,13 +32,14 @@ int get_iface_details(garpd_settings_t *garpd_settings) {
 	}
 
 	memcpy(garpd_settings->garpd_iface->iface_mac, ifr.ifr_hwaddr.sa_data, MAC_LENGTH);
-	printf("MAC Address is: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf("MAC Address is: %02x:%02x:%02x:%02x:%02x:%02x",
 			garpd_settings->garpd_iface->iface_mac[0],
 			garpd_settings->garpd_iface->iface_mac[1],
 			garpd_settings->garpd_iface->iface_mac[2],
 			garpd_settings->garpd_iface->iface_mac[3],
 			garpd_settings->garpd_iface->iface_mac[4],
 			garpd_settings->garpd_iface->iface_mac[5]);
+	fflush(stdout);
 	
 	// Bind our socket to our interface
 	struct sockaddr_ll socket_address;
@@ -59,7 +60,7 @@ int get_iface_details(garpd_settings_t *garpd_settings) {
 
 int send_arp_request(garpd_settings_t *garpd_settings) {
 
-	uint8_t buffer[60];
+	uint8_t buffer[128];
 	memset(buffer, 0x69, sizeof(buffer));
 
 	// Our ethernet header struct
@@ -74,8 +75,7 @@ int send_arp_request(garpd_settings_t *garpd_settings) {
 	memset(mysockaddr.sll_addr, 0x00, sizeof(mysockaddr.sll_addr));
 
 	// FORMAT ETHERNET HEADER:
-	
-	// Cast our buffer of bytes as 
+	// Cast our buffer of bytes as a header:
 	struct ethhdr *ethernet_header = (struct ethhdr *) buffer;
 	
 	// Set Destination MAC:
@@ -89,6 +89,7 @@ int send_arp_request(garpd_settings_t *garpd_settings) {
 	ethernet_header->h_proto = htons(ETH_P_ARP);
 	
 	// FORMAT ARP HEADER:
+	// Start formatting our arp header sizeof(struct ethhdr) into our range of bytes:
 	struct arp_header_t *arp_header = (struct arp_header_t *) (buffer + sizeof(struct ethhdr));
 	arp_header->hardware_type = htons(ARP_HTYPE_ETHER);
 	arp_header->protocol_type = htons(ARP_PYTPE_IPV4);
